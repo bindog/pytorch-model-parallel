@@ -65,4 +65,8 @@ class ModelParallelCrossEntropyFunc(Function):
             grad_logit = (softmax - self.label_split[gpu_id]) / self.batch_size
             # grad_logit_list.append(grad_logit)
             grad_logit_list.append(grad_logit.half())
+        # print("="*70)
+        # print("debug fc grad...")
+        # print(grad_logit_list[0])
+        # print("="*70)
         return tuple(grad_logit_list)

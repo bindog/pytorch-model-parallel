@@ -62,6 +62,12 @@ def train_model(opt, data_loader, model, criterion, optimizer, class_split):
             # with amp.scale_loss(loss, optimizer) as scaled_loss:
             #    scaled_loss.backward()
             loss.backward()
+            # print("~"*70)
+            # print("debug fc weight grad")
+            # print(model.classifier.fc_chunks[0].weight.grad)
+            # print("~"*70)
+            model.classifier.fc_chunks[0].weight.grad *= 65536
+            model.classifier.fc_chunks[1].weight.grad *= 65536
             optimizer.step()
             # Log training progress
             if step > 0 and step % 10 == 0:
