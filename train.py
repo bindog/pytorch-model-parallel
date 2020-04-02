@@ -2,12 +2,17 @@ import os
 import time
 import logging
 import argparse
+import warnings
+warnings.filterwarnings("ignore")
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.backends.cudnn as cudnn
 from torchvision import datasets, transforms
+
+from apex.fp16_utils import *
+from apex import amp, optimizers
 
 from model import ft_net
 from cross_entropy import ModelParallelCrossEntropy
@@ -48,11 +53,14 @@ def train_model(opt, data_loader, model, criterion, optimizer, class_split):
             logits = model(images, labels=onehot_labels)
             # Loss calculation
             if opt.model_parallel:
-                compute_loss = step > 0 and step % 10 == 0
+                # compute_loss = step > 0 and step % 10 == 0
+                compute_loss = True
                 loss = criterion(compute_loss, onehot_labels, *logits)
             else:
                 loss = criterion(logits, labels)
             # Backward
+            # with amp.scale_loss(loss, optimizer) as scaled_loss:
+            #    scaled_loss.backward()
             loss.backward()
             optimizer.step()
             # Log training progress
@@ -113,11 +121,13 @@ if __name__ == "__main__":
 
     if opt.model_parallel:
         # When using model parallel, we wrap all the model except classifier in DataParallel
+        model, optimizer_ft = amp.initialize(model, optimizer_ft, opt_level = "O1")
         model.backbone = nn.DataParallel(model.backbone).cuda()
         model.features = nn.DataParallel(model.features).cuda()
         criterion = ModelParallelCrossEntropy().cuda()
     else:
         # When not using model parallel, we use DataParallel directly
+        model, optimizer_ft = amp.initialize(model, optimizer_ft, opt_level = "O1")
         model = nn.DataParallel(model).cuda()
         criterion = nn.CrossEntropyLoss().cuda()
 

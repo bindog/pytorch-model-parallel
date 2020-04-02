@@ -10,7 +10,7 @@ class ft_net(nn.Module):
         super(ft_net, self).__init__()
         model_ft = models.resnet50(pretrained=True)
         model_ft.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.model = model_ft
+        self.model = model_ft.cuda()
         self.backbone = nn.Sequential(
                     model_ft.conv1,
                     model_ft.bn1,
@@ -21,8 +21,8 @@ class ft_net(nn.Module):
                     model_ft.layer3,
                     model_ft.layer4,
                     model_ft.avgpool
-                )
-        self.features = nn.Linear(2048, feature_dim)
+                ).cuda()
+        self.features = nn.Linear(2048, feature_dim).cuda()
         if am:
             self.classifier = FullyConnected_AM(feature_dim, num_classes, num_gpus, model_parallel, class_split)
         else:

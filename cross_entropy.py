@@ -63,5 +63,6 @@ class ModelParallelCrossEntropyFunc(Function):
         grad_logit_list = []
         for gpu_id, softmax in enumerate(self.saved_variables):
             grad_logit = (softmax - self.label_split[gpu_id]) / self.batch_size
-            grad_logit_list.append(grad_logit)
+            # grad_logit_list.append(grad_logit)
+            grad_logit_list.append(grad_logit.half())
         return tuple(grad_logit_list)
