@@ -2,8 +2,6 @@ import os
 import time
 import logging
 import argparse
-import warnings
-warnings.filterwarnings("ignore")
 
 import torch
 import torch.nn as nn
@@ -59,15 +57,17 @@ def train_model(opt, data_loader, model, criterion, optimizer, class_split):
             else:
                 loss = criterion(logits, labels)
             # Backward
-            # with amp.scale_loss(loss, optimizer) as scaled_loss:
-            #    scaled_loss.backward()
-            loss.backward()
+            with amp.scale_loss(loss, optimizer) as scaled_loss:
+                scaled_loss.backward()
+            # loss.backward()
+
             # print("~"*70)
             # print("debug fc weight grad")
             # print(model.classifier.fc_chunks[0].weight.grad)
             # print("~"*70)
-            model.classifier.fc_chunks[0].weight.grad *= 65536
-            model.classifier.fc_chunks[1].weight.grad *= 65536
+            # model.classifier.fc_chunks[0].weight.grad *= 65536
+            # model.classifier.fc_chunks[1].weight.grad *= 65536
+
             optimizer.step()
             # Log training progress
             if step > 0 and step % 10 == 0:
