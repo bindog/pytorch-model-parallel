@@ -7,23 +7,30 @@ from torch.autograd.function import once_differentiable
 from apex import amp
 
 
+# The new staticmethod style combine with apex
+# Learn from https://github.com/lbin/DCNv2/blob/master/dcn_v2.py
+
+
 class ModelParallelCrossEntropyFunc(Function):
 
     @staticmethod
     @amp.float_function
-    def forward(ctx, *args):  # args is list of logit parts
+    def forward(ctx, *args):
+        # args[0] --> compute loss flag (type: Tensor)
+        # args[1:num_splits + 1] --> one-hot label parts
+        # args[num_splits + 1:] --> fc logit parts
         ctx.num_splits = (len(args) - 1) // 2
         ctx.compute_loss = args[0]
         ctx.batch_size = args[1].size()[0]
-        ctx.label_split = args[1: 1 + ctx.num_splits]
+        ctx.label_split = args[1:ctx.num_splits + 1]
         # for numerical stability
         max_list = []
-        for arg in args[1 + ctx.num_splits:]:
+        for arg in args[ctx.num_splits + 1:]:
             m, _ = torch.max(arg, dim=1, keepdim=True)
             max_list.append(m)
         mc = torch.cat(max_list, dim=1)
         m, _ = torch.max(mc, dim=1, keepdim=True)
-        nargs = [arg - m.to(gpu_id) for gpu_id, arg in enumerate(args[1 + ctx.num_splits:])]
+        nargs = [arg - m.to(gpu_id) for gpu_id, arg in enumerate(args[ctx.num_splits + 1:])]
 
         # get exp sum
         exp_logit_list = []
@@ -67,7 +74,7 @@ class ModelParallelCrossEntropyFunc(Function):
         # print("debug fc grad...")
         # print(grad_logit_list[0])
         # print("="*70)
-        grad_logit_list = [None]*(1 + ctx.num_splits) + grad_logit_list
+        grad_logit_list = [None]*(ctx.num_splits + 1) + grad_logit_list
         return tuple(grad_logit_list)
 
 MPCrossEntropy = ModelParallelCrossEntropyFunc.apply
@@ -76,19 +83,12 @@ class ModelParallelCrossEntropy(nn.Module):
     def __init__(self):
         super(ModelParallelCrossEntropy, self).__init__()
 
-    # args[0] is compute loss flag, args[1] is label_tuple
-    # args[2:] is logit parts
+    # args[0] --> compute loss flag (type: Bool)
+    # args[1] --> one-hot label parts (type: Tuple)
+    # args[2:] --> fc logit parts
     def forward(self, *args):
-        # return ModelParallelCrossEntropyFunc(args[0], args[1])(*args[2:])
-        new_args = []
-        # compute_loss
-        if args[0]:
-            new_args.append(torch.ones(1))
-        else:
-            new_args.append(torch.zeros(1))
-        # label_tuple
-        for label_t in args[1]:
-            new_args.append(label_t)
-        for logit_t in args[2:]:
-            new_args.append(logit_t)
+        # The new staticmethod style requires type of all input args to be Tenosr
+        # so we need to convert the args here
+        compute_loss = torch.ones(1) if args[0] else torch.zeros(1)
+        new_args = (compute_loss, *args[1], *args[2:])
         return MPCrossEntropy(*new_args)
