@@ -56,10 +56,6 @@ class FullyConnected(nn.Module):
             for i in range(self.num_gpus):
                 _x = self.fc_chunks[i](x.cuda(i))
                 x_list.append(_x)
-            # print("#"*70)
-            # print("debug fc weights...")
-            # print(self.fc_chunks[0].weight)
-            # print("#"*70)
             return tuple(x_list)
         else:
             return self.fc(x)

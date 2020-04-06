@@ -51,31 +51,26 @@ def train_model(opt, data_loader, model, criterion, optimizer, class_split):
             logits = model(images, labels=onehot_labels)
             # Loss calculation
             if opt.model_parallel:
-                # compute_loss = step > 0 and step % 10 == 0
-                compute_loss = True
-                loss = criterion(compute_loss, onehot_labels, *logits)
+                compute_loss = step > 0 and step % 10 == 0
+                loss = criterion(compute_loss, opt.fp16, onehot_labels, *logits)
             else:
                 loss = criterion(logits, labels)
             # Backward
-            with amp.scale_loss(loss, optimizer) as scaled_loss:
-                scaled_loss.backward()
-            # loss.backward()
-
-            # print("~"*70)
-            # print("debug fc weight grad")
-            # print(model.classifier.fc_chunks[0].weight.grad)
-            # print("~"*70)
-            # model.classifier.fc_chunks[0].weight.grad *= 65536
-            # model.classifier.fc_chunks[1].weight.grad *= 65536
-
+            scale = 1.0
+            if opt.fp16:
+                with amp.scale_loss(loss, optimizer) as scaled_loss:
+                    scale = scaled_loss.item() / loss.item()
+                    scaled_loss.backward()
+            else:
+                loss.backward()
             optimizer.step()
             # Log training progress
             if step > 0 and step % 10 == 0:
                 example_per_second = opt.batch_size / float(time.time() - start_time)
                 batch_acc = compute_batch_acc(logits, labels, opt.batch_size, opt.model_parallel, step)
                 logging.info(
-                        "epoch [%.3d] iter = %d loss = %.3f acc = %.4f example/sec = %.2f" %
-                        (epoch+1, step, loss.item(), batch_acc, example_per_second)
+                        "epoch [%.3d] iter = %d loss = %.3f scale = %.3f acc = %.4f example/sec = %.2f" %
+                        (epoch+1, step, loss.item(), scale, batch_acc, example_per_second)
                     )
 
 
@@ -91,6 +86,7 @@ if __name__ == "__main__":
     parser.add_argument('--lr', default=0.05, type=float, help='learning rate')
     parser.add_argument('--am', action="store_true", help='use am-softmax')
     parser.add_argument('--model_parallel', action="store_true", help='use model parallel')
+    parser.add_argument('--fp16', action="store_true", help='use mixed-precision')
     opt = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = opt.gpus
@@ -125,15 +121,16 @@ if __name__ == "__main__":
             nesterov=True
         )
 
+    if opt.fp16:
+        model, optimizer_ft = amp.initialize(model, optimizer_ft, opt_level = "O1")
+
     if opt.model_parallel:
         # When using model parallel, we wrap all the model except classifier in DataParallel
-        model, optimizer_ft = amp.initialize(model, optimizer_ft, opt_level = "O1")
         model.backbone = nn.DataParallel(model.backbone).cuda()
         model.features = nn.DataParallel(model.features).cuda()
         criterion = ModelParallelCrossEntropy().cuda()
     else:
         # When not using model parallel, we use DataParallel directly
-        model, optimizer_ft = amp.initialize(model, optimizer_ft, opt_level = "O1")
         model = nn.DataParallel(model).cuda()
         criterion = nn.CrossEntropyLoss().cuda()
 
