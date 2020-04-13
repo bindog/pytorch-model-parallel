@@ -16,7 +16,7 @@ class ModelParallelCrossEntropyFunc(Function):
     def forward(ctx, *args):
         # args[0] --> compute loss flag (type: Tensor)
         # args[1] --> fp16 flag (type: Tensor)
-        # args[2:num_splits + 2] --> one-hot label parts
+        # args[2:num_splits + 2] --> one-hot label parts (type: Tensor or SparseTensor)
         # args[num_splits + 2:] --> fc logit parts
         ctx.num_splits = (len(args) - 2) // 2
         ctx.compute_loss = args[0]
@@ -49,13 +49,20 @@ class ModelParallelCrossEntropyFunc(Function):
             softmax_list.append(softmax)
         ctx.save_for_backward(*softmax_list)
 
-        loss = torch.ones(1) 
+        loss = torch.ones(1)
         if ctx.compute_loss:
             _loss_list = []
             for gpu_id, softmax in enumerate(softmax_list):
-                _loss = torch.sum(softmax * ctx.label_split[gpu_id], dim=1)
-                _loss_list.append(_loss)
-            _loss = comm.reduce_add(_loss_list, 0)
+                if isinstance(ctx.label_split[gpu_id], torch.sparse.LongTensor):
+                    idx = ctx.label_split[gpu_id]._indices()
+                    # FIXME move _loss to gpu?
+                    _loss = torch.zeros(ctx.batch_size)
+                    _loss.scatter_(dim=0, index=idx[0], src=softmax[tuple(idx)])
+                    _loss_list.append(_loss)
+                else:
+                    _loss = torch.sum(softmax * ctx.label_split[gpu_id], dim=1)
+                    _loss_list.append(_loss)
+            _loss = comm.reduce_add(_loss_list, destination=0)
             log_loss = -torch.log(_loss)
             loss = torch.mean(log_loss)
 
@@ -67,7 +74,7 @@ class ModelParallelCrossEntropyFunc(Function):
     def backward(ctx, loss_grad):
         grad_logit_list = []
         for gpu_id, softmax in enumerate(ctx.saved_variables):
-            grad_logit = (softmax - ctx.label_split[gpu_id]) / ctx.batch_size
+            grad_logit = (softmax - ctx.label_split[gpu_id].float()) / ctx.batch_size
             # scaled loss
             grad_logit_list.append(grad_logit * loss_grad.item())
         if ctx.fp16:

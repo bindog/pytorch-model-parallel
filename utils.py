@@ -61,7 +61,7 @@ def get_sparse_onehot_label(labels, num_gpus, num_classes, model_parallel=False,
         for i in range(num_gpus):
             if splits_dict[i]["nums"] == 0:
                 sparse_tensor = torch.sparse.LongTensor(torch.Size([batch_size, splits_dict[i]["num_splits"]]))
-                label_tuple.append(sparse_tensor)
+                label_tuple.append(sparse_tensor.to(i))
             else:
                 sparse_index = torch.LongTensor(splits_dict[i]["index_list"])
                 sparse_value = torch.ones(splits_dict[i]["nums"], dtype=torch.long)
@@ -70,7 +70,7 @@ def get_sparse_onehot_label(labels, num_gpus, num_classes, model_parallel=False,
                                                     sparse_value,
                                                     torch.Size([batch_size, splits_dict[i]["num_splits"]])
                                                 )
-                label_tuple.append(sparse_tensor)
+                label_tuple.append(sparse_tensor.to(i))
         return tuple(label_tuple)
 
 
