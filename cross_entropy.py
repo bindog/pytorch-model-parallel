@@ -53,15 +53,10 @@ class ModelParallelCrossEntropyFunc(Function):
         if ctx.compute_loss:
             _loss_list = []
             for gpu_id, softmax in enumerate(softmax_list):
-                if isinstance(ctx.label_split[gpu_id], torch.sparse.LongTensor):
-                    idx = ctx.label_split[gpu_id]._indices()
-                    # FIXME move _loss to gpu?
-                    _loss = torch.zeros(ctx.batch_size)
-                    _loss.scatter_(dim=0, index=idx[0], src=softmax[tuple(idx)])
-                    _loss_list.append(_loss)
-                else:
-                    _loss = torch.sum(softmax * ctx.label_split[gpu_id], dim=1)
-                    _loss_list.append(_loss)
+                idx = ctx.label_split[gpu_id]._indices()
+                _loss = torch.zeros(ctx.batch_size).to(gpu_id)
+                _loss.scatter_(dim=0, index=idx[0], src=softmax[tuple(idx)])
+                _loss_list.append(_loss)
             _loss = comm.reduce_add(_loss_list, destination=0)
             log_loss = -torch.log(_loss)
             loss = torch.mean(log_loss)

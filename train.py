@@ -14,7 +14,7 @@ from apex import amp, optimizers
 
 from model import ft_net
 from cross_entropy import ModelParallelCrossEntropy
-from utils import get_class_split, get_onehot_label, compute_batch_acc
+from utils import get_class_split, get_sparse_onehot_label, compute_batch_acc
 
 
 def get_data_loader(data_path, batch_size):
@@ -45,7 +45,7 @@ def train_model(opt, data_loader, model, criterion, optimizer, class_split):
             images, labels = data_loader_iter.next()
             images = images.cuda(0)
             labels = labels.cuda(0)
-            onehot_labels = get_onehot_label(labels, opt.num_gpus, opt.num_classes, opt.model_parallel, class_split)
+            onehot_labels = get_sparse_onehot_label(labels, opt.num_gpus, opt.num_classes, opt.model_parallel, class_split)
             # Forward
             optimizer.zero_grad()
             logits = model(images, labels=onehot_labels)
