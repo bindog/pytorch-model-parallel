@@ -7,17 +7,25 @@ from torch.autograd.function import once_differentiable
 from apex import amp
 
 
-# The new staticmethod style combine with apex
-# Learn from https://github.com/lbin/DCNv2/blob/master/dcn_v2.py
 class ModelParallelCrossEntropyFunc(Function):
+    '''
+    The new staticmethod style combine with apex
+    Learn from https://github.com/lbin/DCNv2/blob/master/dcn_v2.py
+    '''
 
     @staticmethod
     @amp.float_function
     def forward(ctx, *args):
-        # args[0] --> compute loss flag (type: Tensor)
-        # args[1] --> fp16 flag (type: Tensor)
-        # args[2:num_splits + 2] --> one-hot label parts (type: Tensor or SparseTensor)
-        # args[num_splits + 2:] --> fc logit parts
+        '''
+        Args:
+            args[0] (torch.Tensor): compute loss flag
+            args[1] (torch.Tensor): fp16 flag
+            args[2:num_splits + 2] (each is a torch.sparse.LongTensor): one-hot label parts, located in different gpus
+            args[num_splits + 2:] (each is a torch.Tensor): fc logit parts, located in different gpus
+
+        Returns:
+            loss
+        '''
         ctx.num_splits = (len(args) - 2) // 2
         ctx.compute_loss = args[0]
         ctx.fp16 = args[1]
@@ -67,6 +75,13 @@ class ModelParallelCrossEntropyFunc(Function):
     @once_differentiable
     @amp.float_function
     def backward(ctx, loss_grad):
+        '''
+        Args:
+            loss_grad (torch.Tensor): gradient backward by last layer, here is d(scaled_loss)/d(loss) = scale
+        Returns:
+            gradients for each input in forward function
+            `None` gradients for two flags and one-hot labels
+        '''
         grad_logit_list = []
         for gpu_id, softmax in enumerate(ctx.saved_variables):
             grad_logit = (softmax - ctx.label_split[gpu_id].float()) / ctx.batch_size
@@ -83,13 +98,20 @@ class ModelParallelCrossEntropy(nn.Module):
     def __init__(self):
         super(ModelParallelCrossEntropy, self).__init__()
 
-    # args[0] --> compute loss flag (type: Bool)
-    # args[1] --> fp16 flag (type: Bool)
-    # args[2] --> one-hot label parts (type: Tuple)
-    # args[3:] --> fc logit parts
     def forward(self, *args):
-        # The new staticmethod style requires type of all input args to be Tenosr
-        # so we need to convert the args here
+        '''
+        The new staticmethod style requires type of all input args to be Tenosr
+        so we need to convert the args here
+
+        Args:
+            args[0] (bool): compute loss flag
+            args[1] (bool): fp16 flag
+            args[2] (tuple of torch.sparse.LongTensor): one-hot label parts, located in different gpus
+            args[3:] (tuple of torch.Tensor): fc logit parts, located in different gpus
+
+        Returns:
+            loss calculated by `ModelParallelCrossEntropyFunc`
+        '''
         compute_loss = torch.ones(1) if args[0] else torch.zeros(1)
         fp16 = torch.ones(1) if args[1] else torch.zeros(1)
         new_args = (compute_loss, fp16, *args[2], *args[3:])
