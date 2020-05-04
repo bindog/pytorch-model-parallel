@@ -22,7 +22,7 @@ class ft_net(nn.Module):
 
 class ft_net_dist(nn.Module):
     def __init__(self, feature_dim, num_classes, num_gpus=1, am=False, model_parallel=False, class_split=None):
-        super(ft_net, self).__init__()
+        super(ft_net_dist, self).__init__()
         self.backbone_and_feature = resnet50(pretrained=True, feature_dim=feature_dim)
 
     def forward(self, x, labels=None):

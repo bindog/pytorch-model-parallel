@@ -1,4 +1,5 @@
 import torch
+import torch.distributed as dist
 import torch.cuda.comm as comm
 
 
@@ -40,6 +41,9 @@ def get_sparse_onehot_label(labels, num_gpus, num_classes, model_parallel=False,
         torch.sparse.LongTensor
         or tuple of torch.sparse.LongTensor if `model_parallel` is True
     '''
+    labels_gather = [torch.zeros_like(labels) for _ in range(num_gpus)]  # TODO change to world_size
+    dist.all_gather(labels_gather, labels)
+    labels = torch.cat(labels_gather)
     labels_list = labels.tolist()
     batch_size = len(labels_list)
 
@@ -86,7 +90,7 @@ def get_sparse_onehot_label(labels, num_gpus, num_classes, model_parallel=False,
                                                     torch.Size([batch_size, splits_dict[i]["num_splits"]])
                                                 )
                 label_tuple.append(sparse_tensor.to(i))
-        return tuple(label_tuple)
+        return labels, tuple(label_tuple)
 
 
 def compute_batch_acc(outputs, labels, batch_size, model_parallel, step):

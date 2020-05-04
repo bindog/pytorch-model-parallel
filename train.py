@@ -11,8 +11,8 @@ import torch.backends.cudnn as cudnn
 from torchvision import datasets, transforms
 from torch.utils.data.distributed import DistributedSampler
 
-from model import ft_net
-from cross_entropy import ModelParallelCrossEntropy
+from model import ft_net_dist
+from cross_entropy import DistModelParallelCrossEntropy
 from utils import get_class_split, get_sparse_onehot_label, compute_batch_acc_dist
 
 try:
@@ -37,7 +37,7 @@ def get_data_loader(data_path, batch_size):
     dataloader = torch.utils.data.DataLoader(
                                     image_dataset,
                                     batch_size=batch_size,
-                                    shuffle=True,
+                                    shuffle=False,
                                     num_workers=8,
                                     pin_memory=True,
                                     sampler=sampler
@@ -52,20 +52,12 @@ def train_model(opt, data_loader, model, part_fc, criterion, optimizer, optimize
         for step in range(len(data_loader)):
             start_time = time.time()
             images, labels = data_loader_iter.next()
-            images = images.cuda(0)
-            labels = labels.cuda(0)
+            images = images.cuda()
+            labels = labels.cuda()
+            batch_size = labels.size(0)
 
-            batch_size = images.size(0)
-            onehot_label = None
-            if opt.rank == 0:
-                onehot_labels = get_sparse_onehot_label(labels, opt.num_gpus, opt.num_classes, opt.model_parallel, class_split)
-                for dst_rank in range(1, opt.world_size):
-                    dst_tensor = onehot_labels[dst_rank]
-                    dist.isend(tensor=dst_tensor, dst=dst_rank)
-                onehot_label = onehot_labels[0]
-            else:
-                onehot_label = torch.zeros(batch_size, class_split[opt.rank])
-                dist.recv(tensor=onehot_label, src=0)
+            total_labels, onehot_labels = get_sparse_onehot_label(labels, opt.num_gpus, opt.num_classes, opt.model_parallel, class_split)
+            onehot_label = onehot_labels[opt.rank]
 
             # Forward
             optimizer.zero_grad()
@@ -80,24 +72,25 @@ def train_model(opt, data_loader, model, part_fc, criterion, optimizer, optimize
 
             # Loss calculation
             compute_loss = step > 0 and step % 10 == 0
-            loss = criterion(logit, one_label, compute_loss, fp16, opt.world_size)
+            loss = criterion(logit, onehot_label, compute_loss, opt.fp16, opt.world_size)
 
             # Backward
             scale = 1.0
-            with amp.scale_loss(loss, optimizer) as scaled_loss:
+            with amp.scale_loss(loss, [optimizer, optimizer_part_fc]) as scaled_loss:
                 scale = scaled_loss.item() / loss.item()  # for debug purpose
                 scaled_loss.backward()
             optimizer.step()
             optimizer_part_fc.step()
             # Log training progress
+            total_batch_size = batch_size * opt.world_size
             if step > 0 and step % 10 == 0:
-                example_per_second = opt.batch_size / float(time.time() - start_time)
+                example_per_second = total_batch_size / float(time.time() - start_time)
 
-                logits_gather = [torch.zeros(opt.batch_size, _split) for _split in class_split]
-                dist.gather(logit, gather_list=logits_gather, dst=0)
+                logits_gather = [torch.zeros(total_batch_size, _split).cuda() for _split in class_split]
+                dist.all_gather(logits_gather, logit)
                 if opt.rank == 0:
-                    logits = torch.cat(logits_gather, dim=0)
-                    batch_acc = compute_batch_acc_dist(logits, labels, opt.batch_size, opt.model_parallel, step)
+                    logits = torch.cat(logits_gather, dim=1)
+                    batch_acc = compute_batch_acc_dist(logits, total_labels, total_batch_size, opt.model_parallel, step)
                     logging.info(
                             "epoch [%.3d] iter = %d loss = %.3f scale = %.3f acc = %.4f example/sec = %.2f" %
                             (epoch+1, step, loss.item(), scale, batch_acc, example_per_second)
@@ -126,10 +119,6 @@ if __name__ == "__main__":
     # num_gpus = len(gpu_ids)
     # opt.num_gpus = num_gpus
 
-    num_classes, data_loader = get_data_loader(opt.data_path, opt.batch_size)
-    if opt.num_classes < num_classes:
-        opt.num_classes = num_classes
-
     opt.distributed = True
     # if 'WORLD_SIZE' in os.environ:
     #     opt.distributed = int(os.environ['WORLD_SIZE']) > 1
@@ -146,9 +135,17 @@ if __name__ == "__main__":
         opt.rank = dist.get_rank()
     # temp fix
     num_gpus = opt.world_size
+    opt.num_gpus = opt.world_size
+
+
+    num_classes, data_loader = get_data_loader(opt.data_path, opt.batch_size)
+    if opt.num_classes < num_classes:
+        opt.num_classes = num_classes
 
     class_split = None
     if opt.model_parallel:
+        # padding num_class to mod world_size
+        opt.num_classes += opt.world_size - opt.num_classes % opt.world_size
         # If using model parallel, split the number of classes
         # accroding to the number of GPUs
         class_split = get_class_split(opt.num_classes, num_gpus)

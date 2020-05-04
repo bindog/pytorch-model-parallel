@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.cuda.comm as comm
+import torch.distributed as dist
 from torch.autograd import Function
 
 from torch.autograd.function import once_differentiable
@@ -144,13 +145,13 @@ class DistModelParallelCrossEntropyFunc(Function):
 
         # for numerical stability
         logit_part_max, _ = torch.max(logit_part, dim=1, keepdim=True)
-        torch.distributed.all_reduce(logit_part_max, ReduceOp.MAX, torch.distributed.group.WORLD)
+        torch.distributed.all_reduce(logit_part_max, ReduceOp.MAX)
         logit_part = logit_part - logit_part_max
 
         # get exp sum
         exp_logit = torch.exp(logit_part)
         exp_sum = torch.sum(exp_logit, dim=1, keepdim=True)
-        torch.distributed.all_reduce(exp_sum, ReduceOp.SUM, torch.distributed.group.WORLD)
+        torch.distributed.all_reduce(exp_sum, ReduceOp.SUM)
 
         # compute softmax output
         ctx.softmax = exp_logit / exp_sum
@@ -159,12 +160,12 @@ class DistModelParallelCrossEntropyFunc(Function):
         loss = torch.ones(1)
         if ctx.compute_loss:
             idx = ctx.label_part._indices()
-            _loss = torch.zeros(ctx.batch_size).to(gpu_id)
+            _loss = torch.zeros(ctx.batch_size).cuda()
             _loss.scatter_(dim=0, index=idx[0], src=ctx.softmax[tuple(idx)])
             # collect loss in rank 0 GPU
             # torch.distributed.reduce(_loss, 0, ReduceOp.SUM, torch.distributed.group.WORLD)
             # all_reduce loss
-            torch.distributed.all_reduce(_loss, ReduceOp.SUM, torch.distributed.group.WORLD)
+            torch.distributed.all_reduce(_loss, ReduceOp.SUM)
             log_loss = -torch.log(_loss)
             loss = torch.mean(log_loss)
         return loss
@@ -180,7 +181,7 @@ class DistModelParallelCrossEntropyFunc(Function):
             gradients for each input in forward function
             `None` gradients for one-hot labels and other args
         '''
-        grad_logit = loss_grad.item() * (ctx.softmax - ctx.label_part) / ctx.batch_size
+        grad_logit = loss_grad.item() * (ctx.softmax - ctx.label_part.float()) / ctx.batch_size
         if ctx.fp16:
             grad_logit = grad_logit.half();
         return grad_logit, None, None, None, None
@@ -190,7 +191,7 @@ DMPCrossEntropy = DistModelParallelCrossEntropyFunc.apply
 
 class DistModelParallelCrossEntropy(nn.Module):
     def __init__(self):
-        super(ModelParallelCrossEntropy, self).__init__()
+        super(DistModelParallelCrossEntropy, self).__init__()
 
     def forward(self, logit_part, label_part, compute_loss, fp16, world_size):
         '''
@@ -207,6 +208,6 @@ class DistModelParallelCrossEntropy(nn.Module):
         Returns:
             loss calculated by `DistModelParallelCrossEntropyFunc`
         '''
-        compute_loss = torch.ones(1) if args[0] else torch.zeros(1)
-        fp16 = torch.ones(1) if args[1] else torch.zeros(1)
+        compute_loss = torch.ones(1) if compute_loss else torch.zeros(1)
+        fp16 = torch.ones(1) if fp16 else torch.zeros(1)
         return DMPCrossEntropy(logit_part, label_part, compute_loss, fp16, world_size)
