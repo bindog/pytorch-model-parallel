@@ -5,6 +5,7 @@ from torch.autograd import Function
 
 from torch.autograd.function import once_differentiable
 from apex import amp
+from apex.parallel import ReduceOp
 
 
 class ModelParallelCrossEntropyFunc(Function):
@@ -116,3 +117,96 @@ class ModelParallelCrossEntropy(nn.Module):
         fp16 = torch.ones(1) if args[1] else torch.zeros(1)
         new_args = (compute_loss, fp16, *args[2], *args[3:])
         return MPCrossEntropy(*new_args)
+
+
+class DistModelParallelCrossEntropyFunc(Function):
+
+    @staticmethod
+    @amp.float_function
+    def forward(ctx, logit_part, label_part, compute_loss, fp16, world_size):
+        '''
+        Args:
+            logit_part: fc logit parts, located in different gpus
+            label_part: one-hot label parts, located in different gpus
+            compute_loss (torch.Tensor): compute loss flag
+            fp16 (torch.Tensor): fp16 flag
+            world_size (int???): total world size, number of GPUs
+        Returns:
+            loss
+        '''
+        # torch.distributed.group.WORLD
+        # ...
+
+        ctx.compute_loss = compute_loss
+        ctx.fp16 = fp16
+        ctx.batch_size = logit_part.size()[0]
+        ctx.label_part = label_part
+
+        # for numerical stability
+        logit_part_max, _ = torch.max(logit_part, dim=1, keepdim=True)
+        torch.distributed.all_reduce(logit_part_max, ReduceOp.MAX, torch.distributed.group.WORLD)
+        logit_part = logit_part - logit_part_max
+
+        # get exp sum
+        exp_logit = torch.exp(logit_part)
+        exp_sum = torch.sum(exp_logit, dim=1, keepdim=True)
+        torch.distributed.all_reduce(exp_sum, ReduceOp.SUM, torch.distributed.group.WORLD)
+
+        # compute softmax output
+        ctx.softmax = exp_logit / exp_sum
+
+        # compute loss if needed
+        loss = torch.ones(1)
+        if ctx.compute_loss:
+            idx = ctx.label_part._indices()
+            _loss = torch.zeros(ctx.batch_size).to(gpu_id)
+            _loss.scatter_(dim=0, index=idx[0], src=ctx.softmax[tuple(idx)])
+            # collect loss in rank 0 GPU
+            # torch.distributed.reduce(_loss, 0, ReduceOp.SUM, torch.distributed.group.WORLD)
+            # all_reduce loss
+            torch.distributed.all_reduce(_loss, ReduceOp.SUM, torch.distributed.group.WORLD)
+            log_loss = -torch.log(_loss)
+            loss = torch.mean(log_loss)
+        return loss
+
+    @staticmethod
+    @once_differentiable
+    @amp.float_function
+    def backward(ctx, loss_grad):
+        '''
+        Args:
+            loss_grad (torch.Tensor): gradient backward by last layer, here is d(scaled_loss)/d(loss) = scale
+        Returns:
+            gradients for each input in forward function
+            `None` gradients for one-hot labels and other args
+        '''
+        grad_logit = loss_grad.item() * (ctx.softmax - ctx.label_part) / ctx.batch_size
+        if ctx.fp16:
+            grad_logit = grad_logit.half();
+        return grad_logit, None, None, None, None
+
+
+DMPCrossEntropy = DistModelParallelCrossEntropyFunc.apply
+
+class DistModelParallelCrossEntropy(nn.Module):
+    def __init__(self):
+        super(ModelParallelCrossEntropy, self).__init__()
+
+    def forward(self, logit_part, label_part, compute_loss, fp16, world_size):
+        '''
+        The new staticmethod style requires type of all input args to be Tenosr
+        so we need to convert the args here
+
+        Args:
+            logit_part (torch.Tensor): fc logit parts
+            label_part (torch.sparse.LongTensor): one-hot label parts
+            compute_loss (bool): compute loss flag
+            fp16 (bool): fp16 flag
+            world_size (int): world_size
+
+        Returns:
+            loss calculated by `DistModelParallelCrossEntropyFunc`
+        '''
+        compute_loss = torch.ones(1) if args[0] else torch.zeros(1)
+        fp16 = torch.ones(1) if args[1] else torch.zeros(1)
+        return DMPCrossEntropy(logit_part, label_part, compute_loss, fp16, world_size)

@@ -1,38 +1,32 @@
-# part of this code borrows from https://github.com/layumi/Person_reID_baseline_pytorch && https://github.com/ZhaoJ9014/face.evoLVe.PyTorch/blob/master/head/metrics.py
 import torch
 import torch.nn as nn
-from torchvision import models
 from torch.autograd import Variable
+
+from resnet import resnet50
 
 
 class ft_net(nn.Module):
     def __init__(self, feature_dim, num_classes, num_gpus=1, am=False, model_parallel=False, class_split=None):
         super(ft_net, self).__init__()
-        model_ft = models.resnet50(pretrained=True)
-        model_ft.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.model = model_ft.cuda()
-        self.backbone = nn.Sequential(
-                    model_ft.conv1,
-                    model_ft.bn1,
-                    model_ft.relu,
-                    model_ft.maxpool,
-                    model_ft.layer1,
-                    model_ft.layer2,
-                    model_ft.layer3,
-                    model_ft.layer4,
-                    model_ft.avgpool
-                ).cuda()
-        self.features = nn.Linear(2048, feature_dim).cuda()
+        self.backbone_and_feature = resnet50(pretrained=True, feature_dim=feature_dim)
         if am:
             self.classifier = FullyConnected_AM(feature_dim, num_classes, num_gpus, model_parallel, class_split)
         else:
             self.classifier = FullyConnected(feature_dim, num_classes, num_gpus, model_parallel, class_split)
 
     def forward(self, x, labels=None):
-        x = self.backbone(x)
-        x = x.view(x.size(0), x.size(1))
-        x = self.features(x)
+        x = self.backbone_and_feature(x)
         x = self.classifier(x, labels)
+        return x
+
+
+class ft_net_dist(nn.Module):
+    def __init__(self, feature_dim, num_classes, num_gpus=1, am=False, model_parallel=False, class_split=None):
+        super(ft_net, self).__init__()
+        self.backbone_and_feature = resnet50(pretrained=True, feature_dim=feature_dim)
+
+    def forward(self, x, labels=None):
+        x = self.backbone_and_feature(x)
         return x
 
 

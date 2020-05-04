@@ -136,6 +136,13 @@ def compute_batch_acc(outputs, labels, batch_size, model_parallel, step):
     return batch_acc
 
 
+def compute_batch_acc_dist(outputs, labels, batch_size, model_parallel, step):
+    _, preds = torch.max(outputs.data, 1)
+    batch_acc = torch.sum(preds == labels).item() / batch_size
+
+    return batch_acc
+
+
 if __name__ == "__main__":
     # import os
     # os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3,4"
