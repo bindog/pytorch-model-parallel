@@ -140,8 +140,25 @@ def compute_batch_acc(outputs, labels, batch_size, model_parallel, step):
     return batch_acc
 
 
-def compute_batch_acc_dist(outputs, labels, batch_size, model_parallel, step):
-    _, preds = torch.max(outputs.data, 1)
+def compute_batch_acc_dist(opt, outputs, labels, batch_size, class_split):
+    # NOTE: labels here are total labels, and we assume equal split here
+    _split = class_split[0]
+    base = _split * opt.local_rank
+    scores, preds = torch.max(outputs.data, dim=1)
+    preds += base
+
+    batch_size = scores.size(0)
+    # flatten tensor for gather
+    gather_tensor = torch.cat([score, preds])
+    # all_gather
+    _gather = [torch.zeros_like(gather_tensor) for _ in range(opt.world_size)]
+    dist.all_gather(_gather, gather_tensor)
+    all_gather_tensor = torch.stack(_gather)
+    # unflatten tensors
+    _scores, _preds = torch.split(all_gather_tensor, batch_size, dim=1)
+    _, idx = torch.max(_scores, dim=0)
+    preds = _preds[idx]
+
     batch_acc = torch.sum(preds == labels).item() / batch_size
 
     return batch_acc

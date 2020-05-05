@@ -46,7 +46,8 @@ def get_data_loader(data_path, batch_size):
 
 
 def train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer, optimizer_part_fc, class_split):
-    logging.info("Start training...")
+    if opt.rank == 0:
+        logging.info("Start training...")
     for epoch in range(opt.num_epochs):
         if opt.distributed:
             sampler.set_epoch(epoch)
@@ -56,7 +57,7 @@ def train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer,
             images, labels = data_loader_iter.next()
             images = images.cuda()
             labels = labels.cuda()
-            batch_size = labels.size(0)
+            rank_batch_size = labels.size(0)
 
             total_labels, onehot_labels = get_sparse_onehot_label(labels, opt.num_gpus, opt.num_classes, opt.model_parallel, class_split)
             onehot_label = onehot_labels[opt.rank]
@@ -84,15 +85,12 @@ def train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer,
             optimizer.step()
             optimizer_part_fc.step()
             # Log training progress
-            total_batch_size = batch_size * opt.world_size
+            total_batch_size = rank_batch_size * opt.world_size
             if step > 0 and step % 10 == 0:
                 example_per_second = total_batch_size / float(time.time() - start_time)
 
-                logits_gather = [torch.zeros(total_batch_size, _split).cuda() for _split in class_split]
-                dist.all_gather(logits_gather, logit)
+                batch_acc = compute_batch_acc_dist(opt, logit, total_labels, total_batch_size, class_split)
                 if opt.rank == 0:
-                    logits = torch.cat(logits_gather, dim=1)
-                    batch_acc = compute_batch_acc_dist(logits, total_labels, total_batch_size, opt.model_parallel, step)
                     logging.info(
                             "epoch [%.3d] iter = %d loss = %.3f scale = %.3f acc = %.4f example/sec = %.2f" %
                             (epoch+1, step, loss.item(), scale, batch_acc, example_per_second)
@@ -140,7 +138,7 @@ if __name__ == "__main__":
     opt.num_gpus = opt.world_size
 
 
-    num_classes, data_loader, sampler = get_data_loader(opt.data_path, opt.batch_size)
+    num_classes, data_loader, sampler = get_data_loader(opt.data_path, opt.batch_size // opt.world_size)
     if opt.num_classes < num_classes:
         opt.num_classes = num_classes
 
@@ -179,7 +177,8 @@ if __name__ == "__main__":
 
 
     if opt.fp16 and opt.distributed:
-        logging.info("distributed training with fp16 settings...")
+        if opt.rank == 0:
+            logging.info("distributed training with fp16 settings...")
         [model, part_fc], [optimizer_ft, optimizer_part_fc] = amp.initialize(
             [model.cuda(), part_fc.cuda()], [optimizer_ft, optimizer_part_fc], opt_level = "O1")
 
