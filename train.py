@@ -144,8 +144,6 @@ if __name__ == "__main__":
 
     class_split = None
     if opt.model_parallel:
-        # padding num_class to mod world_size
-        opt.num_classes += opt.world_size - opt.num_classes % opt.world_size
         # If using model parallel, split the number of classes
         # accroding to the number of GPUs
         class_split = get_class_split(opt.num_classes, num_gpus)

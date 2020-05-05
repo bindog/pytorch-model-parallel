@@ -141,9 +141,10 @@ def compute_batch_acc(outputs, labels, batch_size, model_parallel, step):
 
 
 def compute_batch_acc_dist(opt, outputs, labels, batch_size, class_split):
-    # NOTE: labels here are total labels, and we assume equal split here
-    _split = class_split[0]
-    base = _split * opt.local_rank
+    # NOTE: labels here are total labels
+    assert opt.world_size == len(class_split), "world size should equal to the number of class split"
+    base = sum(class_split[:opt.rank])
+
     scores, preds = torch.max(outputs.data, dim=1)
     preds += base
 
