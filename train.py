@@ -42,12 +42,14 @@ def get_data_loader(data_path, batch_size):
                                     pin_memory=True,
                                     sampler=sampler
                                     )
-    return len(image_dataset.classes), dataloader
+    return len(image_dataset.classes), dataloader, sampler
 
 
-def train_model(opt, data_loader, model, part_fc, criterion, optimizer, optimizer_part_fc, class_split):
+def train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer, optimizer_part_fc, class_split):
     logging.info("Start training...")
     for epoch in range(opt.num_epochs):
+        if opt.distributed:
+            sampler.set_epoch(epoch)
         data_loader_iter = iter(data_loader)
         for step in range(len(data_loader)):
             start_time = time.time()
@@ -138,7 +140,7 @@ if __name__ == "__main__":
     opt.num_gpus = opt.world_size
 
 
-    num_classes, data_loader = get_data_loader(opt.data_path, opt.batch_size)
+    num_classes, data_loader, sampler = get_data_loader(opt.data_path, opt.batch_size)
     if opt.num_classes < num_classes:
         opt.num_classes = num_classes
 
@@ -188,6 +190,6 @@ if __name__ == "__main__":
         model = DDP(model, delay_allreduce=True)
         criterion = DistModelParallelCrossEntropy().cuda()
 
-        train_model(opt, data_loader, model, part_fc, criterion, optimizer_ft, optimizer_part_fc, class_split)
+        train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer_ft, optimizer_part_fc, class_split)
         # python -m torch.distributed.launch --nproc_per_node=2 main_amp.py -a resnet50 --b 224 --workers 4 --opt-level O2 ./
         # https://github.com/NVIDIA/apex/tree/master/examples/imagenet
