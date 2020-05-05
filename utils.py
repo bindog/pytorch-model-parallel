@@ -147,18 +147,20 @@ def compute_batch_acc_dist(opt, outputs, labels, batch_size, class_split):
 
     scores, preds = torch.max(outputs.data, dim=1)
     preds += base
+    
+    batch_size = labels.size(0)
 
-    batch_size = scores.size(0)
-    # flatten tensor for gather
-    gather_tensor = torch.cat([score, preds])
     # all_gather
-    _gather = [torch.zeros_like(gather_tensor) for _ in range(opt.world_size)]
-    dist.all_gather(_gather, gather_tensor)
-    all_gather_tensor = torch.stack(_gather)
-    # unflatten tensors
-    _scores, _preds = torch.split(all_gather_tensor, batch_size, dim=1)
+    scores_gather = [torch.zeros_like(scores) for _ in range(opt.world_size)]
+    dist.all_gather(scores_gather, scores)
+    preds_gather = [torch.zeros_like(preds) for _ in range(opt.world_size)]
+    dist.all_gather(preds_gather, preds)
+    # stack
+    _scores = torch.stack(scores_gather)
+    _preds = torch.stack(preds_gather)
     _, idx = torch.max(_scores, dim=0)
-    preds = _preds[idx]
+    idx = torch.stack([idx, torch.range(0, batch_size - 1).long().cuda()])
+    preds = _preds[tuple(idx)]
 
     batch_acc = torch.sum(preds == labels).item() / batch_size
 
