@@ -13,7 +13,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 from model import ft_net_dist
 from cross_entropy import DistModelParallelCrossEntropy
-from utils import get_class_split, get_sparse_onehot_label, compute_batch_acc_dist
+from utils import get_class_split, get_sparse_onehot_label_dist, compute_batch_acc_dist
 
 try:
     from apex.parallel import DistributedDataParallel as DDP
@@ -46,6 +46,7 @@ def get_data_loader(data_path, batch_size):
 
 
 def train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer, optimizer_part_fc, class_split):
+# def train_model(opt, data_loader, sampler, model, criterion, optimizer, class_split):
     if opt.rank == 0:
         logging.info("Start training...")
     for epoch in range(opt.num_epochs):
@@ -59,7 +60,7 @@ def train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer,
             labels = labels.cuda()
             rank_batch_size = labels.size(0)
 
-            total_labels, onehot_labels = get_sparse_onehot_label(labels, opt.num_gpus, opt.num_classes, opt.model_parallel, class_split)
+            total_labels, onehot_labels = get_sparse_onehot_label_dist(opt, labels, class_split)
             onehot_label = onehot_labels[opt.rank]
 
             # Forward
@@ -67,15 +68,18 @@ def train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer,
             optimizer_part_fc.zero_grad()
 
             # collect all features
-            features = model(images, labels=onehot_label)
+            features = model(images)
             features_gather = [torch.zeros_like(features) for _ in range(opt.world_size)]
             dist.all_gather(features_gather, features)
-            x = torch.cat(features_gather, dim=0)
-            logit = part_fc(x.cuda())
+            all_features = torch.cat(features_gather, dim=0)
+            logit = part_fc(all_features.cuda())
+            # # get logit
+            # logit = model(images)
 
             # Loss calculation
             compute_loss = step > 0 and step % 10 == 0
             loss = criterion(logit, onehot_label, compute_loss, opt.fp16, opt.world_size)
+            # loss = criterion(logit, labels)
 
             # Backward
             scale = 1.0
@@ -117,7 +121,6 @@ if __name__ == "__main__":
     cudnn.benchmark = True
     # gpu_ids = opt.gpus.split(",")
     # num_gpus = len(gpu_ids)
-    # opt.num_gpus = num_gpus
 
     opt.distributed = True
     # if 'WORLD_SIZE' in os.environ:
@@ -133,10 +136,6 @@ if __name__ == "__main__":
                                              init_method='env://')
         opt.world_size = torch.distributed.get_world_size()
         opt.rank = dist.get_rank()
-    # temp fix
-    num_gpus = opt.world_size
-    opt.num_gpus = opt.world_size
-
 
     num_classes, data_loader, sampler = get_data_loader(opt.data_path, opt.batch_size // opt.world_size)
     if opt.num_classes < num_classes:
@@ -146,12 +145,12 @@ if __name__ == "__main__":
     if opt.model_parallel:
         # If using model parallel, split the number of classes
         # accroding to the number of GPUs
-        class_split = get_class_split(opt.num_classes, num_gpus)
+        class_split = get_class_split(opt.num_classes, opt.world_size)
 
     model = ft_net_dist(
             feature_dim=256,
             num_classes=opt.num_classes,
-            num_gpus=num_gpus,
+            num_gpus=opt.world_size,
             am=opt.am,
             model_parallel=opt.model_parallel,
             class_split=class_split
@@ -179,6 +178,7 @@ if __name__ == "__main__":
             logging.info("distributed training with fp16 settings...")
         [model, part_fc], [optimizer_ft, optimizer_part_fc] = amp.initialize(
             [model.cuda(), part_fc.cuda()], [optimizer_ft, optimizer_part_fc], opt_level = "O1")
+        # model, optimizer_ft = amp.initialize(model.cuda(), optimizer_ft, opt_level = "O1")
 
         # By default, apex.parallel.DistributedDataParallel overlaps communication with
         # computation in the backward pass.
@@ -188,5 +188,6 @@ if __name__ == "__main__":
         criterion = DistModelParallelCrossEntropy().cuda()
 
         train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer_ft, optimizer_part_fc, class_split)
+        # train_model(opt, data_loader, sampler, model, criterion, optimizer_ft, class_split)
         # python -m torch.distributed.launch --nproc_per_node=2 main_amp.py -a resnet50 --b 224 --workers 4 --opt-level O2 ./
         # https://github.com/NVIDIA/apex/tree/master/examples/imagenet
