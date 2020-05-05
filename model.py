@@ -24,11 +24,11 @@ class ft_net_dist(nn.Module):
     def __init__(self, feature_dim, num_classes, num_gpus=1, am=False, model_parallel=False, class_split=None):
         super(ft_net_dist, self).__init__()
         self.backbone_and_feature = resnet50(pretrained=True, feature_dim=feature_dim)
-        # self.classifier = FullyConnected(feature_dim, num_classes, num_gpus, False, None)
+        self.classifier = FullyConnected(feature_dim, num_classes, num_gpus, False, None)
 
     def forward(self, x, labels=None):
         x = self.backbone_and_feature(x)
-        # x = self.classifier(x)
+        x = self.classifier(x)
         return x
 
 

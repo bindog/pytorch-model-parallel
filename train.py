@@ -45,8 +45,8 @@ def get_data_loader(data_path, batch_size):
     return len(image_dataset.classes), dataloader, sampler
 
 
-def train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer, optimizer_part_fc, class_split):
-# def train_model(opt, data_loader, sampler, model, criterion, optimizer, class_split):
+# def train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer, optimizer_part_fc, class_split):
+def train_model(opt, data_loader, sampler, model, criterion, optimizer, class_split):
     if opt.rank == 0:
         logging.info("Start training...")
     for epoch in range(opt.num_epochs):
@@ -60,40 +60,45 @@ def train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer,
             labels = labels.cuda()
             rank_batch_size = labels.size(0)
 
-            total_labels, onehot_labels = get_sparse_onehot_label_dist(opt, labels, class_split)
-            onehot_label = onehot_labels[opt.rank]
+            # total_labels, onehot_labels = get_sparse_onehot_label_dist(opt, labels, class_split)
+            # onehot_label = onehot_labels[opt.rank]
 
             # Forward
             optimizer.zero_grad()
-            optimizer_part_fc.zero_grad()
+            # optimizer_part_fc.zero_grad()
 
             # collect all features
-            features = model(images)
-            features_gather = [torch.zeros_like(features) for _ in range(opt.world_size)]
-            dist.all_gather(features_gather, features)
-            all_features = torch.cat(features_gather, dim=0)
-            logit = part_fc(all_features.cuda())
-            # # get logit
-            # logit = model(images)
+            # features = model(images)
+            # features_gather = [torch.zeros_like(features) for _ in range(opt.world_size)]
+            # dist.all_gather(features_gather, features)
+            # all_features = torch.cat(features_gather, dim=0)
+            # logit = part_fc(all_features.cuda())
+            # get logit
+            logit = model(images)
 
             # Loss calculation
-            compute_loss = step > 0 and step % 10 == 0
-            loss = criterion(logit, onehot_label, compute_loss, opt.fp16, opt.world_size)
-            # loss = criterion(logit, labels)
+            # compute_loss = step > 0 and step % 10 == 0
+            # loss = criterion(logit, onehot_label, compute_loss, opt.fp16, opt.world_size)
+            loss = criterion(logit, labels)
 
             # Backward
             scale = 1.0
-            with amp.scale_loss(loss, [optimizer, optimizer_part_fc]) as scaled_loss:
-                scale = scaled_loss.item() / loss.item()  # for debug purpose
+            # with amp.scale_loss(loss, [optimizer, optimizer_part_fc]) as scaled_loss:
+            #     scale = scaled_loss.item() / loss.item()  # for debug purpose
+            #     scaled_loss.backward()
+            # optimizer.step()
+            # optimizer_part_fc.step()
+            with amp.scale_loss(loss, optimizer) as scaled_loss:
                 scaled_loss.backward()
             optimizer.step()
-            optimizer_part_fc.step()
+
             # Log training progress
             total_batch_size = rank_batch_size * opt.world_size
             if step > 0 and step % 10 == 0:
                 example_per_second = total_batch_size / float(time.time() - start_time)
 
-                batch_acc = compute_batch_acc_dist(opt, logit, total_labels, total_batch_size, class_split)
+                # batch_acc = compute_batch_acc_dist(opt, logit, total_labels, total_batch_size, class_split)
+                batch_acc = 0
                 if opt.rank == 0:
                     logging.info(
                             "epoch [%.3d] iter = %d loss = %.3f scale = %.3f acc = %.4f example/sec = %.2f" %
@@ -163,6 +168,7 @@ if __name__ == "__main__":
             nesterov=True
         )
 
+    '''
     part_fc = nn.Linear(256, class_split[opt.rank], bias=False)
     optimizer_part_fc = optim.SGD(
             part_fc.parameters(),
@@ -171,23 +177,25 @@ if __name__ == "__main__":
             momentum=0.9,
             nesterov=True
         )
+    '''
 
 
     if opt.fp16 and opt.distributed:
         if opt.rank == 0:
             logging.info("distributed training with fp16 settings...")
-        [model, part_fc], [optimizer_ft, optimizer_part_fc] = amp.initialize(
-            [model.cuda(), part_fc.cuda()], [optimizer_ft, optimizer_part_fc], opt_level = "O1")
-        # model, optimizer_ft = amp.initialize(model.cuda(), optimizer_ft, opt_level = "O1")
+        # [model, part_fc], [optimizer_ft, optimizer_part_fc] = amp.initialize(
+        #     [model.cuda(), part_fc.cuda()], [optimizer_ft, optimizer_part_fc], opt_level = "O1")
+        model, optimizer_ft = amp.initialize(model.cuda(), optimizer_ft, opt_level = "O1")
 
         # By default, apex.parallel.DistributedDataParallel overlaps communication with
         # computation in the backward pass.
         # model = DDP(model)
         # delay_allreduce delays all communication to the end of the backward pass.
         model = DDP(model, delay_allreduce=True)
-        criterion = DistModelParallelCrossEntropy().cuda()
+        # criterion = DistModelParallelCrossEntropy().cuda()
+        criterion = nn.CrossEntropyLoss().cuda()
 
-        train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer_ft, optimizer_part_fc, class_split)
-        # train_model(opt, data_loader, sampler, model, criterion, optimizer_ft, class_split)
+        # train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer_ft, optimizer_part_fc, class_split)
+        train_model(opt, data_loader, sampler, model, criterion, optimizer_ft, class_split)
         # python -m torch.distributed.launch --nproc_per_node=2 main_amp.py -a resnet50 --b 224 --workers 4 --opt-level O2 ./
         # https://github.com/NVIDIA/apex/tree/master/examples/imagenet
