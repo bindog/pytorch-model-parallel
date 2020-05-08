@@ -80,12 +80,19 @@ def train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer,
             compute_loss = step > 0 and step % 10 == 0
             loss = criterion(logit, onehot_label, compute_loss, opt.fp16, opt.world_size)
             # loss = criterion(logit, labels)
+            if opt.rank == 0 and step > 0 and step % 10 == 0:
+                getBack(loss)
+                exit()
 
             # Backward
             scale = 1.0
             with amp.scale_loss(loss, [optimizer, optimizer_part_fc]) as scaled_loss:
                 scale = scaled_loss.item() / loss.item()  # for debug purpose
                 scaled_loss.backward()
+            if opt.rank == 0 and step > 0 and step % 10 == 0:
+                print("debug fc gradient", opt.rank, part_fc.weight.grad[0][:20])
+                # print("debug cnn gradient", opt.rank, model.module.backbone_and_feature.conv1.weight.grad[0][0][0])
+                print("debug cnn gradient", opt.rank, model.module.backbone_and_feature.conv1.weight.grad)
             optimizer.step()
             optimizer_part_fc.step()
             # Log training progress
