@@ -75,13 +75,11 @@ def train_model(opt, data_loader, sampler, model, criterion, optimizer, class_sp
             # logit = part_fc(all_features.cuda())
             # get logit
             logit = model(images)
-            see_memory_usage(opt, "after model inference")
 
             # Loss calculation
             # compute_loss = step > 0 and step % 10 == 0
             # loss = criterion(logit, onehot_label, compute_loss, opt.fp16, opt.world_size)
             loss = criterion(logit, labels)
-            see_memory_usage(opt, "after loss calc")
 
             # Backward
             scale = 1.0
@@ -92,8 +90,10 @@ def train_model(opt, data_loader, sampler, model, criterion, optimizer, class_sp
             # optimizer_part_fc.step()
             with amp.scale_loss(loss, optimizer) as scaled_loss:
                 scaled_loss.backward()
+            if opt.rank == 0 and step > 0 and step % 10 == 0:
+                print("debug fc gradient", opt.rank, model.module.classifier.fc.weight.grad[0][:20])
+                print("debug cnn gradient", opt.rank, model.module.backbone_and_feature.conv1.weight.grad[0][0][0])
             optimizer.step()
-            see_memory_usage(opt, "after backward")
 
             # Log training progress
             total_batch_size = rank_batch_size * opt.world_size
@@ -189,7 +189,6 @@ if __name__ == "__main__":
         # [model, part_fc], [optimizer_ft, optimizer_part_fc] = amp.initialize(
         #     [model.cuda(), part_fc.cuda()], [optimizer_ft, optimizer_part_fc], opt_level = "O1")
         model, optimizer_ft = amp.initialize(model.cuda(), optimizer_ft, opt_level = "O1")
-        see_memory_usage(opt, "after init")
 
         # By default, apex.parallel.DistributedDataParallel overlaps communication with
         # computation in the backward pass.
