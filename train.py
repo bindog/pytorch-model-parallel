@@ -81,7 +81,7 @@ def train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer,
             loss = criterion(logit, onehot_label, compute_loss, opt.fp16, opt.world_size)
             # loss = criterion(logit, labels)
             if opt.rank == 0 and step > 0 and step % 10 == 0:
-                getBack(loss)
+                getBack(loss.grad_fn)
                 exit()
 
             # Backward
