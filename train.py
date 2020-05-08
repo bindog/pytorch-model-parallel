@@ -147,6 +147,8 @@ if __name__ == "__main__":
         # accroding to the number of GPUs
         class_split = get_class_split(opt.num_classes, opt.world_size)
 
+    model = ft_net_dist(
+            feature_dim=256,
             num_classes=opt.num_classes,
             num_gpus=opt.world_size,
             am=opt.am,
@@ -177,7 +179,6 @@ if __name__ == "__main__":
         [model, part_fc], [optimizer_ft, optimizer_part_fc] = amp.initialize(
             [model.cuda(), part_fc.cuda()], [optimizer_ft, optimizer_part_fc], opt_level = "O1")
         # model, optimizer_ft = amp.initialize(model.cuda(), optimizer_ft, opt_level = "O1")
-        see_memory_usage(opt, "after amp init")
 
         # By default, apex.parallel.DistributedDataParallel overlaps communication with
         # computation in the backward pass.
@@ -185,7 +186,6 @@ if __name__ == "__main__":
         # delay_allreduce delays all communication to the end of the backward pass.
         model = DDP(model, delay_allreduce=True)
         criterion = DistModelParallelCrossEntropy().cuda()
-        see_memory_usage(opt, "after amp DDP")
 
         train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer_ft, optimizer_part_fc, class_split)
         # train_model(opt, data_loader, sampler, model, criterion, optimizer_ft, class_split)
