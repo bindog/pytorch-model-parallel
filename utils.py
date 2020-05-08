@@ -147,6 +147,23 @@ def compute_batch_acc_dist(opt, outputs, labels, batch_size, class_split):
     return batch_acc
 
 
+def see_memory_usage(opt, debug_indicator):
+    if opt.local_rank == 0:
+        print("="*20, debug_indicator, "="*20)
+        print("Memory Allocated ",
+              torch.cuda.memory_allocated() / (1024 * 1024 * 1024),
+              "GigaBytes")
+        print("Max Memory Allocated ",
+              torch.cuda.max_memory_allocated() / (1024 * 1024 * 1024),
+              "GigaBytes")
+        print("Cache Allocated ",
+              torch.cuda.memory_cached() / (1024 * 1024 * 1024),
+              "GigaBytes")
+        print("Max cache Allocated ",
+              torch.cuda.max_memory_cached() / (1024 * 1024 * 1024),
+              "GigaBytes")
+        print("="*50)
+
 if __name__ == "__main__":
     # import os
     # os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3,4"
