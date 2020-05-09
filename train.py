@@ -47,7 +47,6 @@ def get_data_loader(data_path, batch_size):
 
 
 def train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer, optimizer_part_fc, class_split):
-# def train_model(opt, data_loader, sampler, model, criterion, optimizer, class_split):
     if opt.rank == 0:
         logging.info("Start training...")
     for epoch in range(opt.num_epochs):
@@ -70,19 +69,14 @@ def train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer,
 
             # collect all features
             features = model(images)
-            # features_gather = [torch.zeros_like(features) for _ in range(opt.world_size)]
-            # dist.all_gather(features_gather, features)
             _features_gather = [torch.zeros_like(features) for _ in range(opt.world_size)]
-            features_gather = AllGather(features, _features_gather)
+            features_gather = AllGather(features, *_features_gather)
             all_features = torch.cat(features_gather, dim=0)
             logit = part_fc(all_features.cuda())
-            # # get logit
-            # logit = model(images)
 
             # Loss calculation
             compute_loss = step > 0 and step % 10 == 0
             loss = criterion(logit, onehot_label, compute_loss, opt.fp16, opt.world_size)
-            # loss = criterion(logit, labels)
 
             # Backward
             scale = 1.0
@@ -95,7 +89,6 @@ def train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer,
             total_batch_size = rank_batch_size * opt.world_size
             if step > 0 and step % 10 == 0:
                 example_per_second = total_batch_size / float(time.time() - start_time)
-
                 batch_acc = compute_batch_acc_dist(opt, logit, total_labels, total_batch_size, class_split)
                 if opt.rank == 0:
                     logging.info(
@@ -181,7 +174,6 @@ if __name__ == "__main__":
             logging.info("distributed training with fp16 settings...")
         [model, part_fc], [optimizer_ft, optimizer_part_fc] = amp.initialize(
             [model.cuda(), part_fc.cuda()], [optimizer_ft, optimizer_part_fc], opt_level = "O1")
-        # model, optimizer_ft = amp.initialize(model.cuda(), optimizer_ft, opt_level = "O1")
 
         # By default, apex.parallel.DistributedDataParallel overlaps communication with
         # computation in the backward pass.
@@ -190,7 +182,7 @@ if __name__ == "__main__":
         model = DDP(model, delay_allreduce=True)
         criterion = DistModelParallelCrossEntropy().cuda()
 
-        train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer_ft, optimizer_part_fc, class_split)
-        # train_model(opt, data_loader, sampler, model, criterion, optimizer_ft, class_split)
-        # python -m torch.distributed.launch --nproc_per_node=2 main_amp.py -a resnet50 --b 224 --workers 4 --opt-level O2 ./
         # https://github.com/NVIDIA/apex/tree/master/examples/imagenet
+        # start script
+        # python3 -m torch.distributed.launch --nproc_per_node=2 train.py --data_path /root/Market-1501-c/train --model_parallel --fp16
+        train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer_ft, optimizer_part_fc, class_split)

@@ -139,7 +139,7 @@ def compute_batch_acc_dist(opt, outputs, labels, batch_size, class_split):
     _scores = torch.stack(scores_gather)
     _preds = torch.stack(preds_gather)
     _, idx = torch.max(_scores, dim=0)
-    idx = torch.stack([idx, torch.range(0, batch_size - 1).long().cuda()])
+    idx = torch.stack([idx, torch.arange(0, batch_size).cuda()])
     preds = _preds[tuple(idx)]
 
     batch_acc = torch.sum(preds == labels).item() / batch_size

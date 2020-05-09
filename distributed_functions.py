@@ -17,9 +17,9 @@ class AllGatherFunc(Function):
     def backward(ctx, *grads):
         # func_input = ctx.saved_tensors
         # grad_out = torch.zeros_like(func_input)
-        grad_list = list(*grads)
+        grad_list = list(grads)
         grad_out = grad_list[dist.get_rank()]
-        return (grad_out, *grad_list)
+        return (grad_out, *[None for _ in range(len(grad_list))])
     # @staticmethod
     # def forward(ctx, tensor, group, inplace, *gather_list):
     #     ctx.save_for_backward(tensor)
