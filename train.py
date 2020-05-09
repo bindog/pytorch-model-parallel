@@ -127,7 +127,8 @@ if __name__ == "__main__":
 
     if opt.distributed:
         opt.gpu = opt.local_rank
-        torch.cuda.set_device(opt.gpu)
+        # torch.cuda.set_device(opt.gpu)
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(opt.gpu)
         torch.distributed.init_process_group(backend='nccl',
                                              init_method='env://')
         opt.world_size = torch.distributed.get_world_size()
