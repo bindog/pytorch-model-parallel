@@ -60,8 +60,7 @@ def train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer,
             labels = labels.cuda()
             rank_batch_size = labels.size(0)
 
-            total_labels, onehot_labels = get_sparse_onehot_label_dist(opt, labels, class_split)
-            onehot_label = onehot_labels[opt.rank]
+            total_labels, onehot_label = get_sparse_onehot_label_dist(opt, labels, class_split)
 
             # Forward
             optimizer.zero_grad()
@@ -127,8 +126,8 @@ if __name__ == "__main__":
 
     if opt.distributed:
         opt.gpu = opt.local_rank
-        # torch.cuda.set_device(opt.gpu)
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(opt.gpu)
+        torch.cuda.set_device(opt.gpu)
+        # os.environ["CUDA_VISIBLE_DEVICES"] = str(opt.gpu)
         torch.distributed.init_process_group(backend='nccl',
                                              init_method='env://')
         opt.world_size = torch.distributed.get_world_size()

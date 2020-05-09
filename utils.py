@@ -56,21 +56,18 @@ def get_sparse_onehot_label_dist(opt, labels, class_split):
                 splits_dict[j]["nums"] += 1
                 break
     # finally get the sparse tensor
-    label_tuple = []
-    for i in range(opt.world_size):
-        if splits_dict[i]["nums"] == 0:
-            sparse_tensor = torch.sparse.LongTensor(torch.Size([batch_size, splits_dict[i]["num_splits"]]))
-            label_tuple.append(sparse_tensor.to(i))
-        else:
-            sparse_index = torch.LongTensor(splits_dict[i]["index_list"])
-            sparse_value = torch.ones(splits_dict[i]["nums"], dtype=torch.long)
-            sparse_tensor = torch.sparse.LongTensor(
-                                                sparse_index.t(),
-                                                sparse_value,
-                                                torch.Size([batch_size, splits_dict[i]["num_splits"]])
-                                            )
-            label_tuple.append(sparse_tensor.to(i))
-    return labels, tuple(label_tuple)
+    i = opt.rank
+    if splits_dict[i]["nums"] == 0:
+        sparse_tensor = torch.sparse.LongTensor(torch.Size([batch_size, splits_dict[i]["num_splits"]]))
+    else:
+        sparse_index = torch.LongTensor(splits_dict[i]["index_list"])
+        sparse_value = torch.ones(splits_dict[i]["nums"], dtype=torch.long)
+        sparse_tensor = torch.sparse.LongTensor(
+                                            sparse_index.t(),
+                                            sparse_value,
+                                            torch.Size([batch_size, splits_dict[i]["num_splits"]])
+                                        )
+    return labels, sparse_tensor.cuda()
 
 
 def compute_batch_acc(outputs, labels, batch_size, model_parallel, step):
@@ -125,6 +122,7 @@ def compute_batch_acc_dist(opt, outputs, labels, batch_size, class_split):
     assert opt.world_size == len(class_split), "world size should equal to the number of class split"
     base = sum(class_split[:opt.rank])
 
+    # add each gpu part max index by base
     scores, preds = torch.max(outputs.data, dim=1)
     preds += base
 
@@ -138,6 +136,9 @@ def compute_batch_acc_dist(opt, outputs, labels, batch_size, class_split):
     # stack
     _scores = torch.stack(scores_gather)
     _preds = torch.stack(preds_gather)
+    # _scores and _preds share the same shape
+    # we can get the preds index by compose the index in dim 0(max index by _scores)
+    # and index in dim 1 (from 0 to batch_size -1)
     _, idx = torch.max(_scores, dim=0)
     idx = torch.stack([idx, torch.arange(0, batch_size).cuda()])
     preds = _preds[tuple(idx)]
