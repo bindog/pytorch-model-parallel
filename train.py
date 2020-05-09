@@ -13,6 +13,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 from model import ft_net_dist
 from cross_entropy import DistModelParallelCrossEntropy
+from distributed_functions import AllGather
 from utils import *
 
 try:
@@ -69,8 +70,10 @@ def train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer,
 
             # collect all features
             features = model(images)
-            features_gather = [torch.zeros_like(features) for _ in range(opt.world_size)]
-            dist.all_gather(features_gather, features)
+            # features_gather = [torch.zeros_like(features) for _ in range(opt.world_size)]
+            # dist.all_gather(features_gather, features)
+            _features_gather = [torch.zeros_like(features) for _ in range(opt.world_size)]
+            features_gather = AllGather(features, _features_gather)
             all_features = torch.cat(features_gather, dim=0)
             logit = part_fc(all_features.cuda())
             # # get logit
@@ -80,19 +83,12 @@ def train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer,
             compute_loss = step > 0 and step % 10 == 0
             loss = criterion(logit, onehot_label, compute_loss, opt.fp16, opt.world_size)
             # loss = criterion(logit, labels)
-            if opt.rank == 0 and step > 0 and step % 10 == 0:
-                getBack(loss.grad_fn)
-                exit()
 
             # Backward
             scale = 1.0
             with amp.scale_loss(loss, [optimizer, optimizer_part_fc]) as scaled_loss:
                 scale = scaled_loss.item() / loss.item()  # for debug purpose
                 scaled_loss.backward()
-            if opt.rank == 0 and step > 0 and step % 10 == 0:
-                print("debug fc gradient", opt.rank, part_fc.weight.grad[0][:20])
-                # print("debug cnn gradient", opt.rank, model.module.backbone_and_feature.conv1.weight.grad[0][0][0])
-                print("debug cnn gradient", opt.rank, model.module.backbone_and_feature.conv1.weight.grad)
             optimizer.step()
             optimizer_part_fc.step()
             # Log training progress
