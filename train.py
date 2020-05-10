@@ -10,6 +10,7 @@ import torch.distributed as dist
 import torch.backends.cudnn as cudnn
 from torchvision import datasets, transforms
 from torch.utils.data.distributed import DistributedSampler
+import byteps.torch as bps
 
 from model import ft_net_dist
 from cross_entropy import DistModelParallelCrossEntropy
@@ -34,7 +35,7 @@ def get_data_loader(data_path, batch_size):
         ]
     data_transforms = transforms.Compose(transform_train_list)
     image_dataset = datasets.ImageFolder(data_path, data_transforms)
-    sampler = DistributedSampler(image_dataset);
+    sampler = DistributedSampler(image_dataset, num_replicas=bps.size(), rank=bps.rank());
     dataloader = torch.utils.data.DataLoader(
                                     image_dataset,
                                     batch_size=batch_size,
@@ -79,9 +80,14 @@ def train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer,
 
             # Backward
             scale = 1.0
-            with amp.scale_loss(loss, [optimizer, optimizer_part_fc]) as scaled_loss:
-                scale = scaled_loss.item() / loss.item()  # for debug purpose
-                scaled_loss.backward()
+            # with amp.scale_loss(loss, [optimizer, optimizer_part_fc]) as scaled_loss:
+            #     scale = scaled_loss.item() / loss.item()  # for debug purpose
+            #     scaled_loss.backward()
+
+            # TODO
+            # manually average gradient by div batch_size
+            # ...
+            loss.backward()
             optimizer.step()
             optimizer_part_fc.step()
             # Log training progress
@@ -112,6 +118,10 @@ if __name__ == "__main__":
     parser.add_argument("--local_rank", default=0, type=int)
     opt = parser.parse_args()
 
+    # NOTE debug disable fp16 first
+    opt.fp16 = False
+    bps.init()
+
     # os.environ["CUDA_VISIBLE_DEVICES"] = opt.gpus
     cudnn.benchmark = True
     # gpu_ids = opt.gpus.split(",")
@@ -127,11 +137,8 @@ if __name__ == "__main__":
     if opt.distributed:
         opt.gpu = opt.local_rank
         torch.cuda.set_device(opt.gpu)
-        # os.environ["CUDA_VISIBLE_DEVICES"] = str(opt.gpu)
-        torch.distributed.init_process_group(backend='nccl',
-                                             init_method='env://')
-        opt.world_size = torch.distributed.get_world_size()
-        opt.rank = dist.get_rank()
+        opt.world_size = bps.size()
+        opt.rank = bps.rank()
 
     num_classes, data_loader, sampler = get_data_loader(opt.data_path, opt.batch_size // opt.world_size)
     if opt.num_classes < num_classes:
@@ -158,6 +165,11 @@ if __name__ == "__main__":
             momentum=0.9,
             nesterov=True
         )
+    optimizer_ft = bps.DistributedOptimizer(
+        optimizer_ft, named_parameters=model.named_parameters(),
+    )
+        # compression=compression,
+        # backward_passes_per_step=args.batches_per_pushpull)
 
     part_fc = nn.Linear(256, class_split[opt.rank], bias=False)
     optimizer_part_fc = optim.SGD(
@@ -169,20 +181,15 @@ if __name__ == "__main__":
         )
 
 
-    if opt.fp16 and opt.distributed:
+    if opt.distributed:
         if opt.rank == 0:
-            logging.info("distributed training with fp16 settings...")
-        [model, part_fc], [optimizer_ft, optimizer_part_fc] = amp.initialize(
-            [model.cuda(), part_fc.cuda()], [optimizer_ft, optimizer_part_fc], opt_level = "O1")
-
-        # By default, apex.parallel.DistributedDataParallel overlaps communication with
-        # computation in the backward pass.
-        # model = DDP(model)
-        # delay_allreduce delays all communication to the end of the backward pass.
-        model = DDP(model, delay_allreduce=True)
+            logging.info("distributed training with bytedance parameter server")
+        model = model.cuda()
+        part_fc = part_fc.cuda()
+        bps.broadcast_parameters(model.state_dict(), root_rank=0)
+        bps.broadcast_optimizer_state(optimizer_ft, root_rank=0)
         criterion = DistModelParallelCrossEntropy().cuda()
 
-        # https://github.com/NVIDIA/apex/tree/master/examples/imagenet
         # start script
         # python3 -m torch.distributed.launch --nproc_per_node=2 train.py --data_path /root/Market-1501-c/train --model_parallel --fp16
         train_model(opt, data_loader, sampler, model, part_fc, criterion, optimizer_ft, optimizer_part_fc, class_split)
