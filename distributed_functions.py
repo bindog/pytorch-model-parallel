@@ -23,6 +23,11 @@ class AllGatherFunc(Function):
         ]
         for op in dist_ops:
             op.wait()
+
+        # TODO: compare time usage
+        # grad_list = torch.stack(grad_list, dim=0)
+        # dist.all_reduce(grad_list, op=ReduceOp.SUM)
+        # grad_out = grad_list[rank]
         return (grad_out, *[None for _ in range(len(grad_list))])
 
 AllGather = AllGatherFunc.apply
