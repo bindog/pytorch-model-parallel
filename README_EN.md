@@ -37,7 +37,7 @@ class FullyConnected(nn.Module):
 ```
 Similar implementation can also be found [here](https://github.com/ZhaoJ9014/face.evoLVe.PyTorch/blob/d5e31893f7e30c0f82262e701463fd83d9725381/head/metrics.py#L41)
 
-this implementation can only solve part of the problem, and it will introduce new issues, GPU memory imbalanced usage between different gpus. Cause all the results will concat at GPU 0, and the loss calculation also happends at GPU 0, the GPU memory usage and computaion load will much higher in GPU 0 compare to other GPUs, we still can not use big batch size.
+this implementation can only solve part of the problem, and it will introduce new issues, GPU memory imbalanced usage between different gpus. Cause all the results will concat at GPU 0, and the loss calculation also happends at GPU 0, the GPU memory usage and computaion load will be much higher in GPU 0 compare to other GPUs, we still can not use big batch size.
 
 ## Did this repository solve the problem?
 
@@ -55,9 +55,9 @@ some advantages:
 
 First make sure you do need model parallel:
 
-- If the number of labels in your datasets exceed 1 million?
+- Is the number of labels in your datasets exceed 1 million?
 - If the last layer of your model is fully connected layer? And Did you use the CrossEntropyLoss?
-- If you have enough GPUs? (at least 4~8 GPUs)
+- Do you have enough GPUs? (at least 4~8 GPUs)
 
 If the anwser of all the above questions is yes, and you can consider using the model parallel. But as it requires to hack into the model and optimizer, you will need to migrate this to your repository by yourself
 
