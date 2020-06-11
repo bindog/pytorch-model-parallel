@@ -1,3 +1,5 @@
+[English version](https://github.com/bindog/pytorch-model-parallel/blob/master/README_EN.md)
+
 # 显存均衡的模型并行实现(基于PyTorch、支持混合精度训练与分布式训练)
 
 ## 为什么要用模型并行？暴力数据并行不就好了？
